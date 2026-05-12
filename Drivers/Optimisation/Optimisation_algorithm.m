@@ -11,7 +11,11 @@ clc
 %% Obtain Data
 OutputFileName = "Optimising Backup and System_LCOH";
 
-[SolarData, WindData, HourlyElectricityPrices] = ImportRawData();
+% Set Target Location and Year
+TargetLocation = "Whyalla";
+TargetYear = 2020;
+
+[SolarData, WindData, HourlyElectricityPrices] = ImportRawData(TargetLocation, TargetYear);
 
 % Hourly electricity prices are based on 2020, 36.5833 is added to give the prices a more present real value.
 HourlyElectricityPrices = HourlyElectricityPrices + 36.5833;
