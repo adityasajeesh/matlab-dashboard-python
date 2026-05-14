@@ -1,78 +1,48 @@
 import matlab.engine
 import time
-
+import pandas as pd
+import os
 class MatlabModel:
     def __init__(self):
-        print("Starting MATLAB Engine... This may take a few seconds.")
+        print("Starting MATLAB Engine... This might take a minute.")
         self.eng = matlab.engine.start_matlab()
         
-        # Base path of MATLAB model - adjust as needed
-        base_path = r'C:\Users\adity\OneDrive - University of Adelaide\INFO 3901\MATLAB Model\[OPTIMISATION IN PROGRESS] MATLAB Techno-economic Model'
+        # Point to the MATLAB folder
+        model_path = os.path.abspath("C:\\Users\\adity\\OneDrive - University of Adelaide\\INFO 3901\\MATLAB Model\\[OPTIMISATION IN PROGRESS] MATLAB Techno-economic Model\\")
+        self.eng.cd(model_path, nargout=0)
+        
+        # CRITICAL FIX: Tell MATLAB to "Add with Subfolders" so it can see your Functions and Data!
+        self.eng.eval("addpath(genpath(pwd))", nargout=0)
+        
+        print("MATLAB Engine Ready!")
 
-        # CWD to model dir
-        self.eng.cd(base_path, nargout=0)
+    def run_optimisation(self, location="Whyalla", year=2020):
+        print(f"Injecting parameters: Location={location}, Year={year}")
+        
+        # 1. Inject variables directly into the MATLAB workspace
+        self.eng.workspace['TargetLocation'] = location
+        self.eng.workspace['TargetYear'] = float(year) 
 
-        # Add necessary paths for MATLAB functions
-        self.eng.addpath(self.eng.genpath(base_path), nargout=0)
-        print("MATLAB Engine started, CWD set, paths configured.")
+        start_time = time.time()
+        
+        # 2. Run the driver script
+        print("Running Optimisation_algorithm.m...")
+        # Since we added everything to the path above, we can just call the file by its name!
+        self.eng.eval("Optimisation_algorithm", nargout=0)
+        
+        end_time = time.time()
+        print(f"Simulation completed in {end_time - start_time:.2f} seconds.")
+        
+        # 3. Load the results
+        # NOTE: Make sure this path is pointing exactly to where your MATLAB model is saved
+        model_path = os.path.abspath("C:\\Users\\adity\\OneDrive - University of Adelaide\\INFO 3901\\MATLAB Model\\[OPTIMISATION IN PROGRESS] MATLAB Techno-economic Model\\")
+        results_path = os.path.join(model_path, r"Drivers\Optimisation\Saved Data\Optimising Backup and System_LCOH.txt")
+        
+        if os.path.exists(results_path):
+            df = pd.read_csv(results_path)
+            return df
+        else:
+            raise FileNotFoundError("Simulation finished, but output file was not found.")
 
-    def run_single_case(self, pv_share, rem_ocm_ratio, rem, storage_hrs):
-        """
-        Executes the MATLAB model without needing to write to a text file.
-        Passes variables natively from Python to MATLAB workspace.
-        """
-        try:
-            # Import data within MATLAB workspace
-            self.eng.eval("[SolarData, WindData, HourlyElectricityPrices] = ImportRawData();", nargout=0)
-            
-            # Execute CombinedCases directly
-            # Note: inputs must be cast to float for MATLAB double compatibility
-            output = self.eng.CombinedCases(
-                float(pv_share), 
-                float(rem_ocm_ratio), 
-                float(rem), 
-                float(storage_hrs), 
-                self.eng.workspace['SolarData'], 
-                self.eng.workspace['WindData'], 
-                self.eng.workspace['HourlyElectricityPrices'],
-                nargout=1
-            )
-            
-            # Helper function to safely extract a scalar float from MATLAB objects
-            def to_float(val):
-                try:
-                    # Try direct cast (works if MATLAB returns a standard number)
-                    return float(val)
-                except TypeError:
-                    # If MATLAB returned a 1x1 matlab.double array (e.g., [[3.14]])
-                    return float(val[0][0])
-
-            # Backup is a time-series array (8760 hours), we must sum the first row
-            backup_raw = output['Backup']
-            try:
-                # matlab.double arrays are structured like nested lists: [[val1, val2, ...]]
-                backup_total = sum(backup_raw[0])
-            except TypeError:
-                backup_total = to_float(backup_raw)
-
-            # Extract results back to Python dict natively
-            results = {
-                "Storage_LCOH": to_float(output['Storage_LCOH']),
-                "GreenHydrogen_LCOH": to_float(output['GreenHydrogen_LCOH_Optimisation']),
-                "BlueHydrogen_LCOH": to_float(output['BlueHydrogen_LCOH']),
-                "Transport_LCHS": to_float(output['Transport_LCHS']),
-                "Electricity_LCOE": to_float(output['Electricity_LCOE']),
-                "Electricity_LCOH": to_float(output['Electricity_LCOH']),
-                "Steel_LCOS": to_float(output['Steel_LCOS']),
-                "Backup": float(backup_total)
-            }
-            return results
-        except Exception as e:
-            print(f"Error running MATLAB model: {e}")
-            return None
-
-    def close(self):
-        self.eng.quit()
-
-# Global instance initialized on server start
+# Create the instance so app.py can use it
 matlab_instance = MatlabModel()

@@ -1,147 +1,141 @@
-import time
 import dash
 from dash import dcc, html, Input, Output, State
 import dash_bootstrap_components as dbc
+import plotly.express as px
+import plotly.graph_objects as go
+import pandas as pd
 from matlab_bridge import matlab_instance
 
-# Initialize Dash App with Bootstrap Theme
-app = dash.Dash(__name__, external_stylesheets=[dbc.themes.FLATLY])
-app.title = "H₂ / Steel Optimisation Console"
+# Initialize the Dash app
+app = dash.Dash(__name__, external_stylesheets=[dbc.themes.LUMEN, dbc.icons.BOOTSTRAP])
 
-# --- Tooltip Components ---
-def create_tooltip_label(id_string, label_text, tooltip_text):
-    return html.Div([
-        html.Span(label_text, id=id_string, style={"textDecoration": "underline", "cursor": "help", "fontWeight": "bold"}),
-        dbc.Tooltip(tooltip_text, target=id_string, placement="right")
-    ], className="mb-2")
-
-# --- UI Layout ---
+# --- LAYOUT ---
 app.layout = dbc.Container([
-    # Header
     dbc.Row([
-        dbc.Col(html.H2("H₂ / Steel Optimisation Console", className="text-primary mt-4 mb-4"))
+        dbc.Col(html.H2(
+            [html.I(className="bi bi-globe-americas text-success me-2"), "Global Green Hydrogen Insights"], 
+            className="fw-bold my-4 text-dark"
+        ), width=12)
     ]),
     
     dbc.Row([
-        # Left Column: Inputs
+        # LEFT SIDEBAR: Controls
         dbc.Col([
             dbc.Card([
-                dbc.CardHeader("Model Parameters"),
+                dbc.CardHeader(html.H5("Scenario Parameters", className="m-0 fw-bold")),
                 dbc.CardBody([
-                    create_tooltip_label("lbl-pv", "PV Gen Share (0.0 - 1.0)", "The proportion of total renewable capacity allocated to Solar PV vs Wind."),
-                    dcc.Slider(id="input-pv", min=0, max=1, step=0.01, value=0.43, marks={0: '0', 1: '1'}),
-                    html.Br(),
+                    html.Label("Target Location (Any City)", className="fw-semibold text-muted small"),
+                    # Changed from Dropdown to a free-text Input
+                    dcc.Input(
+                        id='location-input',
+                        type='text',
+                        placeholder='e.g., Tokyo, Berlin, Sydney...',
+                        value='Whyalla',
+                        className="form-control mb-4 shadow-sm"
+                    ),
                     
-                    create_tooltip_label("lbl-ratio", "ReM/OcM Ratio", "Ratio between Renewable Energy Multiple and Operation capacity."),
-                    dcc.Input(id="input-ratio", type="number", value=0.4, step=0.1, className="form-control"),
-                    html.Br(),
-
-                    create_tooltip_label("lbl-rem", "REM (Oversizing Factor)", "An oversizing factor. REM 3.0 means renewables capacity is 3x the electrolyser demand."),
-                    dcc.Input(id="input-rem", type="number", value=3.4, step=0.1, className="form-control"),
-                    html.Br(),
-
-                    create_tooltip_label("lbl-storage", "Storage Hours", "The duration the energy storage can run the facility at full load without wind/sun."),
-                    dcc.Input(id="input-storage", type="number", value=19, step=1, className="form-control"),
-                    html.Br(),
-
-                    dbc.Button("Run Optimization", id="btn-run", color="primary", className="w-100 mt-3"),
-                    html.Div(id="status-text", className="text-muted mt-2 text-center")
+                    html.Label("Analysis Year", className="fw-semibold text-muted small"),
+                    dcc.Input(
+                        id='year-input',
+                        type='number',
+                        value=2020,
+                        min=1940, # Open-Meteo historical data goes back to 1940
+                        max=2024,
+                        step=1,
+                        className="form-control mb-4 shadow-sm"
+                    ),
+                    
+                    dbc.Button(
+                        [html.I(className="bi bi-play-fill me-2"), "Run Simulation"], 
+                        id="run-button", 
+                        color="success", 
+                        className="w-100 fw-bold shadow-sm"
+                    )
                 ])
-            ], className="shadow-sm")
-        ], md=4),
-
-        # Right Column: Outputs
+            ], className="shadow-sm border-0 rounded-3 mb-4")
+            
+            # NOTE: Terminology alert has been removed from here!
+            
+        ], lg=3, md=12),
+        
+        # RIGHT MAIN AREA: Results Dashboard
         dbc.Col([
-            dbc.Row([
-                dbc.Col([
-                    dbc.Card([
-                        dbc.CardBody([
-                            create_tooltip_label("lbl-lcoh-green", "Green H₂ LCOH ($/kg)", "The break-even price of Green Hydrogen covering lifetime CAPEX/OPEX."),
-                            html.H3(id="out-green-lcoh", children="---")
-                        ])
-                    ], className="shadow-sm mb-3")
-                ], md=6),
-                dbc.Col([
-                    dbc.Card([
-                        dbc.CardBody([
-                            create_tooltip_label("lbl-lcos", "Steel LCOS ($/t)", "Comprehensive break-even cost to produce one metric tonne of green steel."),
-                            html.H3(id="out-steel-lcos", children="---")
-                        ])
-                    ], className="shadow-sm mb-3")
-                ], md=6),
-            ]),
-            dbc.Row([
-                dbc.Col([
-                    dbc.Card([
-                        dbc.CardBody([
-                            create_tooltip_label("lbl-lcoe", "Electricity LCOE ($/MWh)", "Average net present cost of raw electricity generation over asset lifetime."),
-                            html.H3(id="out-elec-lcoe", children="---")
-                        ])
-                    ], className="shadow-sm mb-3")
-                ], md=6),
-                dbc.Col([
-                    dbc.Card([
-                        dbc.CardBody([
-                            create_tooltip_label("lbl-storage-cost", "Storage LCOH ($/kg)", "Portion of the levelized cost directly attributed to the storage system."),
-                            html.H3(id="out-storage", children="---")
-                        ])
-                    ], className="shadow-sm mb-3")
-                ], md=6),
-            ]),
-            dbc.Row([
-                dbc.Col([
-                    dbc.Card([
-                        dbc.CardBody([
-                            html.Span("Required Grid Backup Energy", style={"fontWeight": "bold"}),
-                            html.H4(id="out-backup", children="---")
-                        ])
-                    ], className="shadow-sm mb-3")
+            # Set type="dot" to create the 3 pulsing ellipses (...)
+            dcc.Loading(
+                id="loading-spinner",
+                type="dot", 
+                color="#198754",
+                children=html.Div(id="results-output", children=[
+                    html.Div(
+                        "Enter any global city and click 'Run Simulation' to fetch API data and generate insights.", 
+                        className="text-center text-muted mt-5 pt-5"
+                    )
                 ])
-            ])
-        ], md=8)
+            )
+        ], lg=9, md=12)
     ])
-], fluid=True, className="p-4 bg-light", style={"minHeight": "100vh"})
+], fluid=True, className="bg-light pb-5", style={"minHeight": "100vh"})
 
 
-# --- Application Callbacks ---
+# --- CALLBACK ---
 @app.callback(
-    [Output("out-green-lcoh", "children"),
-     Output("out-steel-lcos", "children"),
-     Output("out-elec-lcoe", "children"),
-     Output("out-storage", "children"),
-     Output("out-backup", "children"),
-     Output("status-text", "children")],
-    [Input("btn-run", "n_clicks")],
-    [State("input-pv", "value"),
-     State("input-ratio", "value"),
-     State("input-rem", "value"),
-     State("input-storage", "value")],
+    Output("results-output", "children"),
+    Input("run-button", "n_clicks"),
+    State("location-input", "value"),
+    State("year-input", "value"),
     prevent_initial_call=True
 )
-def execute_model(n_clicks, pv_share, ratio, rem, storage):
-    print("\n--- INITIATING NEW OPTIMIZATION ---")
-    print(f"1. Python sending to MATLAB: PV={pv_share}, Ratio={ratio}, REM={rem}, Storage={storage}h")
-
-    start_time = time.time()
-    
-    # Call the MATLAB Engine Bridge
-    results = matlab_instance.run_single_case(pv_share, ratio, rem, storage)
-
-    calc_time = time.time() - start_time
-    print(f"2. MATLAB calculation complete in {calc_time:.4f} seconds.")
-    print(f"3. Raw data returned: {results}")
-    
-    if results is None:
-        return "Error", "Error", "Error", "Error", "Error", "Execution failed. Check console."
+def run_model_from_ui(n_clicks, selected_location, selected_year):
+    if n_clicks is None or not selected_location:
+        return dash.no_update
         
-    return (
-        f"${results['GreenHydrogen_LCOH']:.2f}",
-        f"${results['Steel_LCOS']:.2f}",
-        f"${results['Electricity_LCOE']:.2f}",
-        f"${results['Storage_LCOH']:.2f}",
-        f"{results['Backup']:.2f} MWh",
-        "Run Complete."
-    )
+    try:
+        df = matlab_instance.run_optimisation(location=selected_location, year=selected_year)
+        
+        opt_idx = df['Total_LCOH'].idxmin()
+        optimal = df.loc[opt_idx]
+        
+        # KPI Cards
+        kpi_cards = dbc.Row([
+            dbc.Col(dbc.Card(dbc.CardBody([html.H6("Minimum LCOH", className="text-muted"), html.H3(f"${optimal['Total_LCOH']:.2f}/kg", className="text-success fw-bold")]), className="border-0 shadow-sm rounded-3"), width=3),
+            dbc.Col(dbc.Card(dbc.CardBody([html.H6("Optimal Solar Share", className="text-muted"), html.H3(f"{optimal['PV_gen_share']*100:.0f}%", className="text-primary fw-bold")]), className="border-0 shadow-sm rounded-3"), width=3),
+            dbc.Col(dbc.Card(dbc.CardBody([html.H6("Optimal Storage", className="text-muted"), html.H3(f"{optimal['Storage_hrs']} hrs", className="text-info fw-bold")]), className="border-0 shadow-sm rounded-3"), width=3),
+            dbc.Col(dbc.Card(dbc.CardBody([html.H6("Optimal REM", className="text-muted"), html.H3(f"{optimal['REM']}x", className="text-warning fw-bold")]), className="border-0 shadow-sm rounded-3"), width=3),
+        ], className="mb-4")
+        
+        # Stacked Bar
+        components = ['Storage_LCOH', 'GreenHydrogen_LCOH', 'Transport_LCHS', 'Electricity_LCOH']
+        labels = ['Storage Cost', 'Electrolyser Cost', 'Transport Cost', 'Grid Electricity']
+        fig_bar = go.Figure(data=[go.Bar(name=labels[i], x=['Optimal Configuration'], y=[optimal[comp]]) for i, comp in enumerate(components)])
+        fig_bar.update_layout(barmode='stack', title="LCOH Breakdown", template="plotly_white", margin=dict(l=20, r=20, t=40, b=20))
+        
+        # Scatter Plot
+        fig_scatter = px.scatter(
+            df, x="BackupShare", y="Total_LCOH", color="PV_gen_share", 
+            title="System Cost vs Grid Reliance",
+            labels={"BackupShare": "Grid Backup Required (%)", "Total_LCOH": "Total LCOH ($)", "PV_gen_share": "Solar Share"}
+        )
+        fig_scatter.update_layout(template="plotly_white", margin=dict(l=20, r=20, t=40, b=20))
+        
+        # Heatmap
+        heat_df = df[(df['REM'] == optimal['REM']) & (df['OcM'] == optimal['OcM'])]
+        heat_pivot = heat_df.pivot_table(index="Storage_hrs", columns="PV_gen_share", values="Total_LCOH", aggfunc="min")
+        fig_heat = px.imshow(heat_pivot, aspect="auto", color_continuous_scale="Viridis", title=f"Cost Heatmap (REM={optimal['REM']}x)")
+        fig_heat.update_layout(template="plotly_white", margin=dict(l=20, r=20, t=40, b=20))
+        
+        return html.Div([
+            kpi_cards,
+            dbc.Row([
+                dbc.Col(dbc.Card(dcc.Graph(figure=fig_bar), className="border-0 shadow-sm rounded-3 mb-4"), lg=4, md=12),
+                dbc.Col(dbc.Card(dcc.Graph(figure=fig_scatter), className="border-0 shadow-sm rounded-3 mb-4"), lg=8, md=12),
+            ]),
+            dbc.Row([
+                dbc.Col(dbc.Card(dcc.Graph(figure=fig_heat), className="border-0 shadow-sm rounded-3 mb-4"), lg=12, md=12)
+            ])
+        ])
+        
+    except Exception as e:
+        return dbc.Alert([html.H5("Simulation Error"), html.P(str(e))], color="danger")
 
-if __name__ == "__main__":
-    app.run(debug=True, port=8050)
+if __name__ == '__main__':
+    app.run_server(debug=True)
